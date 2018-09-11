@@ -1,0 +1,267 @@
+###########
+#
+# Samantha Misurda (smisurda)
+# HW2
+#
+###########
+
+
+
+library(e1071)
+
+# Using this library, as permitted on Piazza in the post "Do we need to normalize the data for KNN"
+library(class)
+
+########
+# Part 1
+########
+
+# Build a predictive regression model
+get_pred_logreg <- function(train, test){
+  colnames(train)[ncol(train)] <- "output"
+  colnames(test)[ncol(test)] <- "output"
+  test.output <- test[ncol(test)]
+  
+  model <- glm(output ~ ., data = train, family = binomial(link='logit'))
+  prediction <- predict(model, test, type = 'response')
+  
+  #encode class into 0/1 for easier handling by classification algorithm in R
+  #prediction <- ifelse(prediction >= .5, 1, 0)
+    
+  # Create and return the data frame
+  #rename test.output
+  result <- data.frame(prediction, test.output)
+  colnames(result)[ncol(result)] <- "true_output"
+  return(result)
+}
+
+# Build an SVM 
+get_pred_svm <- function(train, test){
+  colnames(train)[ncol(train)] <- "output"
+  colnames(test)[ncol(test)] <- "output"
+  test.output <- test[ncol(test)]
+  
+  model <- svm(as.factor(output) ~ ., data = train, probability = TRUE)
+  prediction <-attr(predict(model, test, probability = TRUE),'prob')[,'1'] 
+  
+  # Create and return the data frame
+  #rename test.output
+  result <- data.frame(prediction, test.output)
+  colnames(result)[ncol(result)] <- "true_output"
+  return(result)
+}
+
+# Build a naive bayes model
+get_pred_nb <- function(train, test){
+  colnames(train)[ncol(train)] <- "output"
+  colnames(test)[ncol(test)] <- "output"
+  test.output <- test[ncol(test)]
+  
+  model <- naiveBayes(as.factor(output) ~ ., data = train)
+  prediction <- predict(model,test,type='raw')[,'1']
+    
+  # Create and return the data frame
+  result <- data.frame(prediction, test.output)
+  colnames(result)[ncol(result)] <- "true_output"
+  return(result)
+}
+
+# Build a KNN Model
+get_pred_knn <- function(train, test, k){
+  colnames(train)[ncol(train)] <- "output"
+  colnames(test)[ncol(test)] <- "output"
+  test.output <- test[ncol(test)]
+  
+  model <- knn(train[,-ncol(train)], test[,-ncol(train)], train[,ncol(train)], k = k, prob=TRUE)
+  
+  # Example from Piazza
+  prob <- attr(model,"prob") #extract probability
+  
+
+  #get the raw probability 
+  #note the probability output by kNN is  the proportion of the votes 
+  #for the *winning* class, so we need to retrieve raw probability this way
+
+  prediction<-ifelse(model=='1',prob,1-prob) 
+
+    
+  # Create and return the data frame
+  #rename test.output
+  result <- data.frame(prediction, test.output)
+  colnames(result)[ncol(result)] <- "true_output"
+  return(result)
+}
+
+# Default predictor model
+# Assumes the last column of data is the output dimension
+get_pred_default <- function(train, test){
+  nf <- ncol(train)
+  pred <- mean(train[,nf])
+  
+  #return that prediction for each input in the test set
+  result <- data.frame(prediction = rep(pred, nrow(test)), true_output = test[,ncol(test)])
+
+  return(result)
+}
+
+######
+# TESTING
+#####
+
+wines<-read.csv('wine.csv')
+wines$type=as.character(wines$type) 
+#encode class into 0/1 for easier handling by classification algorithm in R
+wines$type=ifelse(wines$type=='high',1,0)
+
+mypred <- get_pred_logreg(wines, wines)
+mse <- mean((mypred$pred-mypred$true_output)^2)
+cat('logistic regression training mse', mse, '\n')
+# logistic regression training mse 0.1358395
+
+mypred <- get_pred_svm(wines, wines)
+mse <- mean((mypred$pred-mypred$true_output)^2)
+cat('svm training mse', mse, '\n')
+# svm training mse 0.09947697 
+
+mypred <- get_pred_nb(wines, wines)
+mse <- mean((mypred$pred-mypred$true_output)^2)
+cat('nb training mse', mse, '\n')
+# nb training mse 0.1222417
+
+mypred <- get_pred_knn(wines, wines, 10)
+mse <- mean((mypred$pred-mypred$true_output)^2)
+cat('10nn training mse', mse, '\n')
+# 10nn training mse 0.1017117 
+
+########
+# Part 2
+########
+#nn: number of data points, k: number of folds
+get_folds <- function(nn, k) {
+    index <- seq(1, nn)
+    rand.index <- sample(index, nn)
+    group <- seq_along(rand.index)%%k
+    chunk <- split(rand.index, group)
+    return(chunk)
+}
+
+# Run cross-validation on a provided model
+do_cv_class <- function(df, num_folds, model_name) {
+  #get the number of rows
+  size <- nrow(df)
+  #generate k folds
+  folds <- get_folds(size, num_folds)
+  
+  # Build data frame to return test sets
+  result.set <- data.frame(prediction = c(), test.output = c())
+
+  for(fold in folds){
+    test.set <- subset(df, as.numeric(rownames(df)) %in% fold)
+    train.set <- subset(df, !as.numeric(rownames(df)) %in% fold)
+    
+    if(model_name == "logreg") {
+      result <- get_pred_logreg(train.set, test.set)
+    }
+    else if (model_name == "svm") {
+      result <- get_pred_svm(train.set, test.set)
+    }
+    else if(model_name == "nb") {
+      result <- get_pred_nb(train.set, test.set)
+    }
+    else if(grep("\\d+nn", model_name) > 0) {
+      #For knn, we get 10nn and need to extract 10 as k
+      k <- as.integer(sub("(\\d+)nn", "\\1", model_name))
+      result <- get_pred_knn(train.set, test.set, k)
+    }
+    
+    # Add this iteration to the resulting data frame
+    result.set <- rbind(result.set, result)
+  }
+  
+  return(result.set)
+
+}
+
+########
+# Part 3
+########
+
+# Calculates true and false positives, accuracy, precision, and recall from a set of predicted values
+get_metrics <- function(df, cutoff = .5){
+  
+  total.observations <- nrow(df)
+  true.pos <- 0
+  true.neg <- 0
+  false.pos <- 0
+  false.neg <- 0
+  
+  for(i in 1:nrow(df)){
+      pred <- 0
+      if(df[i,1] >= cutoff) # If the prediction is greater than the cut off, set the prediction to 1
+      {
+        pred <- 1
+      }  
+    
+      if(pred == 0 & df[i,2] == 0) # True negative
+      {
+        true.neg <- true.neg + 1
+      }
+      else if(pred == 1 & df[i,2] == 1) # True Positive
+      {
+        true.pos <- true.pos + 1
+      }
+      else if(pred == 1 & df[i,2] == 0) # False Positive
+      {
+        false.pos <- false.pos + 1 
+      }
+      else # False Negative
+      {
+        false.neg <- false.neg + 1
+      }
+  }
+  
+  # From lecture 4, slide 5
+  tpr <- true.pos/(true.pos + false.neg)
+  fpr <- false.pos/(true.neg + false.pos)
+  acc <- (true.pos + true.neg) / total.observations
+  precision <- true.pos / (true.pos + false.pos)
+  recall <- tpr
+  
+  result <- data.frame(tpr, fpr, acc, precision, recall)
+  return(result)
+}
+
+########
+# Part 4A
+########
+
+# Calculate metrics for varying values of k
+answer <- data.frame()
+for(k in 1:25){
+  nn <- ""
+  nn <- paste0(k,"nn")
+  result <- do_cv_class(wines, 10, nn)
+  result.row <- get_metrics(result)
+  answer <- rbind(answer, result.row)
+}  
+answer
+
+########
+# Part 4B
+########
+
+# Calculate logistic regression metrics
+logreg.result <- do_cv_class(wines, 10, "logreg")
+get_metrics(logreg.result)
+
+# Calculate SVM metrics
+svm.result <- do_cv_class(wines, 10, "svm") 
+get_metrics(svm.result)
+
+# Calculate Naive Bayes metrics
+nb.result <- do_cv_class(wines, 10, "nb")
+get_metrics(nb.result)
+
+# Calculate Default Classifier
+default.result <- get_pred_default(wines, wines)
+get_metrics(default.result)

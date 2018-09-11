@@ -1,0 +1,450 @@
+# Samantha L. Misurda
+# Data Mining Final
+# Project A
+
+library(knitr)
+
+# Load in the dataset
+tracker.data <- read.csv("data.csv")
+
+# Define functions -- assembled from HW1 solutions
+
+trim <- function(x) gsub("^\\s+|\\s+$", "", x)
+
+is.missing.symbol <- function(x) {
+  if (nchar(trim(x)) == 0) {
+    missing = 1
+  } else {
+    missing = 0
+  }
+  return(missing)
+}
+
+# Define brief function
+brief <- function(df) {
+  
+  real.index <- NULL
+  symbol.index <- NULL
+  
+  num_row <- nrow(df)
+  num_att <- ncol(df)
+  
+  for (ii in 1:num_att) {
+    this.att <- df[, ii]
+    if (is.numeric(this.att)) {
+      real.index <- c(real.index, ii)
+    }
+    if (is.factor(this.att)) {
+      symbol.index <- c(symbol.index, ii)
+    }
+  }
+  
+  
+  cat("This dataset has ", num_row, " Rows", " ", num_att, " Attributes\n")
+  
+  
+  real.out <- NULL
+  for (index in real.index) {
+    this.att <- df[, index]
+    att_name <- colnames(df)[index]
+    num_missing <- length(which(is.na(this.att)))  #number of missing value
+    Min <- min(this.att, na.rm = TRUE)
+    Max <- max(this.att, na.rm = TRUE)
+    Mean <- mean(this.att, na.rm = TRUE)
+    Median <- median(this.att, na.rm = TRUE)
+    Sdev <- sd(this.att, na.rm = TRUE)
+    Var <- var(this.att, na.rm = TRUE)
+    this.line <- data.frame(Attribute_ID = index, Attribute_Name = att_name, Missing = num_missing, 
+                            Min, Max, Mean, Median, Sdev, Variance = Var)
+    real.out <- rbind(real.out, this.line)
+  }
+  
+  cat("real valued attributes\n")
+  cat("======================\n")
+  print(real.out)
+  
+  # gather stats for symbolic attributes
+  
+  
+  symbol.out <- NULL
+  max_MCV = 5
+  for (index in symbol.index) {
+    this.att <- df[, index]
+    att_name <- colnames(df)[index]
+    #num_missing <- sum(unlist(lapply(this.att, is.missing.symbol)))
+    num_missing <- length(this.att[this.att == ''])
+    
+    non_missing_id <- which(unlist(lapply(this.att, is.missing.symbol)) == 0)        
+    this.att <- this.att[non_missing_id]
+    #arity <- length(unique(this.att))
+    
+    
+    #without drop=true, level ("") will still be counted though we removed in condition.
+    arity <- nlevels(this.att[this.att!='',drop=TRUE]) 
+    
+    
+    num_MCV <- min(max_MCV, arity)
+    count.tbl <- as.data.frame(table(this.att))
+    #count.tbl <- count(as.data.frame(this.att))
+    
+    sorted <- count.tbl[order(-count.tbl$Freq), ][1:num_MCV, ]
+    
+    
+    MCV_str <- ""
+    for (kk in 1:nrow(sorted)) {
+      MCV_value <- as.character(sorted[kk, 1])
+      MCV_count <- sorted[kk, 2]
+      this_str <- paste(MCV_value, "(", MCV_count, ")", sep = "")
+      MCV_str <- paste(MCV_str, this_str, sep = " ")
+    }
+    
+    
+    this.line <- data.frame(Attribute_ID = index, Attribute_Name = att_name, Missing = num_missing, 
+                            arity, MCVs_counts = MCV_str)
+    symbol.out <- rbind(symbol.out, this.line)
+  }
+  cat("symbolic attributes\n")
+  cat("===================\n")
+  print(symbol.out)
+  
+}
+
+# Execute brief function on dataset
+brief(tracker.data)
+
+### Task 1
+
+# Build a test and training set
+testing.set.indices <- NULL
+training.set <- NULL
+
+#make sure each user is present
+for (user in levels(tracker.data$user)) {
+#sample 250 indices for the user
+#save these indices to include in the training set and exclude from the test set
+testing.set.indices <- c(testing.set.indices, sample(which(tracker.data$user == user), size = 250))
+}
+
+training.set <- tracker.data[testing.set.indices,]
+testing.set <- tracker.data[-testing.set.indices,]
+
+# Build the logistic regression model
+get_pred_logreg <- function(train, test){
+colnames(train)[ncol(train)] <- "output"
+colnames(test)[ncol(test)] <- "output"
+test.output <- test[ncol(test)]
+
+model <- glm(output ~ ., data = train, family = binomial(link='logit'))
+prediction <- predict(model, test, type = 'response')
+
+#encode class into 0/1 for easier handling by classification algorithm in R
+#prediction <- ifelse(prediction >= .5, 1, 0)
+
+# Create and return the data frame
+#rename test.output
+result <- data.frame(prediction, test.output)
+colnames(result)[ncol(result)] <- "true_output"
+return(result)
+}
+
+# Function to return true/false positive rate, accuracy, etc. 
+get_metrics <- function(df, cutoff = .5){
+
+total.observations <- nrow(df)
+true.pos <- 0
+true.neg <- 0
+false.pos <- 0
+false.neg <- 0
+
+for(i in 1:nrow(df)){
+if(df[i,1] == 0 & df[i,2] == 0) # True negative
+{
+  true.neg <- true.neg + 1
+}
+else if(df[i,1] == 1 & df[i,2] == 1) # True Positive
+{
+  true.pos <- true.pos + 1
+}
+else if(df[i,1] == 1 & df[i,2] == 0) # False Positive
+{
+  false.pos <- false.pos + 1 
+}
+else # False Negative
+{
+  false.neg <- false.neg + 1
+}
+}
+
+# From lecture 4, slide 5
+tpr <- true.pos/(true.pos + false.neg)
+fpr <- false.pos/(true.neg + false.pos)
+acc <- (true.pos + true.neg) / total.observations
+precision <- true.pos / (true.pos + false.pos)
+recall <- tpr
+
+result <- data.frame(tpr, fpr, acc, precision, recall)
+return(result)
+}
+
+# Transform the class variable into binary
+training.binary <- training.set[7:ncol(training.set)]
+training.binary$class=ifelse(training.binary$class=="standingup" | training.binary$class == "sittingdown" | training.binary$class == "walking",1,0)
+
+testing.binary <- testing.set[7:ncol(testing.set)]
+testing.binary$class=ifelse(testing.binary$class=="standingup" | testing.binary$class == "sittingdown" | testing.binary$class == "walking",1,0)
+
+
+# Build the logistic regression classifier, and return the metrics
+mypred <- get_pred_logreg(training.binary, testing.binary)
+mypred$prediction <- ifelse(mypred$prediction >= .5, 1, 0)
+lr.result <- get_metrics(mypred)
+
+library(class)
+# Function to build a KNN model
+get_pred_knn <- function(train, test, k){
+colnames(train)[ncol(train)] <- "output"
+colnames(test)[ncol(test)] <- "output"
+test.output <- test[ncol(test)]
+
+model <- knn(train[,-ncol(train)], test[,-ncol(train)], train[,ncol(train)], k = k, prob=TRUE)
+
+# Example from Piazza
+prob <- attr(model,"prob") #extract probability
+
+
+#get the raw probability 
+#note the probability output by kNN is  the proportion of the votes 
+#for the *winning* class, so we need to retrieve raw probability this way
+
+prediction<-ifelse(model=='1',prob,1-prob) 
+
+
+# Create and return the data frame
+#rename test.output
+result <- data.frame(prediction, test.output)
+colnames(result)[ncol(result)] <- "true_output"
+return(result)
+}
+
+
+# Build the KNN classifier and return the results
+
+mypred <- get_pred_knn(training.binary, testing.binary, 10)
+
+mypred$prediction <- ifelse(mypred$prediction >= .5, 1, 0)
+knn.result <- get_metrics(mypred)
+
+# Build a data frame of all of the accuracy measures
+model.accuracy <- data.frame("Logistic Regression" = lr.result$acc, "KNN" = knn.result$acc)
+
+### Task 2
+
+tracker.data.binary <- tracker.data[7:ncol(tracker.data)]
+tracker.data.binary$class=ifelse(tracker.data.binary$class=="standingup" | tracker.data.binary$class == "sittingdown" | tracker.data.binary$class == "walking",1,0)
+
+debora.data.binary <- tracker.data.binary[tracker.data$user=="debora",]
+jose.data.binary <- tracker.data.binary[tracker.data$user=="jose_carlos",]
+katia.data.binary <- tracker.data.binary[tracker.data$user=="katia",]
+wallace.data.binary <- tracker.data.binary[tracker.data$user=="wallace",]
+
+euclid_dist <- function(x1, y1, z1, x2, y2, z2) {
+return(sqrt((x1-x2)^2 + (y1-y2)^2 + (z1-z2)^2))
+}
+
+add_dist_col <- function(df) {
+dist1 <- c(NA)
+dist2 <- c(NA)
+dist3 <- c(NA)
+dist4 <- c(NA)
+prev <- c(NA)
+for(i in 2:nrow(df)){
+dist1 <- c(dist1, euclid_dist(df$x1[i], df$y1[i], df$z1[i], df$x1[i-1], df$y1[i-1], df$z1[i-1]))
+dist2 <- c(dist2, euclid_dist(df$x2[i], df$y2[i], df$z2[i], df$x2[i-1], df$y2[i-1], df$z2[i-1]))
+dist3 <- c(dist3, euclid_dist(df$x3[i], df$y3[i], df$z3[i], df$x3[i-1], df$y3[i-1], df$z3[i-1]))
+dist4 <- c(dist4, euclid_dist(df$x4[i], df$y4[i], df$z4[i], df$x4[i-1], df$y4[i-1], df$z4[i-1]))
+prev <- c(prev, df$class[i-1])
+}
+
+df <- cbind(df, dist1, dist2, dist3, dist4, prev)
+return(df)
+}
+
+debora.data.binary.dist <- add_dist_col(debora.data.binary)
+jose.data.binary.dist <- add_dist_col(jose.data.binary)
+katia.data.binary.dist <- add_dist_col(katia.data.binary)
+wallace.data.binary.dist <- add_dist_col(wallace.data.binary)
+# Reorder columns
+debora.data.binary.dist.no.points <- debora.data.binary.dist[c(14:17, 13)]
+jose.data.binary.dist.no.points <- jose.data.binary.dist[c(14:17, 13)]
+katia.data.binary.dist.no.points <- katia.data.binary.dist[c(14:17, 13)]
+wallace.data.binary.dist.no.points <- wallace.data.binary.dist[c(14:17, 13)]
+
+# Delete first record, nothing to compare to
+debora.data.binary.dist.no.points <- debora.data.binary.dist.no.points[-1,]
+jose.data.binary.dist.no.points <- jose.data.binary.dist.no.points[-1,]
+katia.data.binary.dist.no.points <- katia.data.binary.dist.no.points[-1,]
+wallace.data.binary.dist.no.points <- wallace.data.binary.dist.no.points[-1,]
+
+# Create testing and training sets 
+distance.indices.debora <- sample(nrow(debora.data.binary.dist.no.points), size = 250)
+distance.indices.jose <- sample(nrow(jose.data.binary.dist.no.points), size = 250)
+distance.indices.katia <- sample(nrow(katia.data.binary.dist.no.points), size = 250)
+distance.indices.wallace <- sample(nrow(wallace.data.binary.dist.no.points), size = 250)
+
+training.set.debora <- debora.data.binary.dist.no.points[distance.indices.debora,]
+testing.set.debora <-  debora.data.binary.dist.no.points[-distance.indices.debora,]
+
+training.set.jose <- jose.data.binary.dist.no.points[distance.indices.jose,]
+testing.set.jose <-  jose.data.binary.dist.no.points[-distance.indices.jose,]
+
+training.set.katia <- katia.data.binary.dist.no.points[distance.indices.katia,]
+testing.set.katia <-  katia.data.binary.dist.no.points[-distance.indices.katia,]
+
+training.set.wallace <- wallace.data.binary.dist.no.points[distance.indices.wallace,]
+testing.set.wallace <-  wallace.data.binary.dist.no.points[-distance.indices.wallace,]
+
+######## This is just hard-coded for each user, sub out names
+############
+
+# Build the KNN classifier and return the results
+mypred <- get_pred_knn(training.set.wallace, testing.set.wallace, 10)
+mypred$prediction <- ifelse(mypred$prediction >= .5, 1, 0)
+knn.result <- get_metrics(mypred)
+
+
+
+### Task 3
+
+#assumes value is in the last column
+find_change_points <- function(df) {
+changes <- NULL
+for (row in 2:nrow(df)) {
+if(df[row,ncol(df)] != df[row-1,ncol(df)]) {
+changes <- c(changes, row)
+}
+}
+return(changes)
+}
+
+# Metric for calculating the effectiveness of change point detection
+calc_quality_cp <- function(actual, calc) {
+error <- 0
+for(item in calc) {
+error <- error + min(abs(actual - item))
+}
+
+return(error)
+}
+
+
+actual.cp <- find_change_points(wallace.data.binary)
+
+mypred <- get_pred_knn(training.binary, wallace.data.binary, 2)
+mypred$prediction <- ifelse(mypred$prediction >= .5, 1, 0)
+mypred <- mypred[c(2,1)]
+knn.cp <- find_change_points(mypred)
+
+calc_quality_cp(actual.cp, knn.cp)
+
+
+
+debora.data.binary.prev <- debora.data.binary.dist[c(1:12, 18, 13)]
+jose.data.binary.prev <- jose.data.binary.dist[c(1:12, 18, 13)]
+katia.data.binary.prev <- katia.data.binary.dist[c(1:12, 18, 13)]
+wallace.data.binary.prev <- wallace.data.binary.dist[c(1:12, 18, 13)]
+
+debora.data.binary.prev <- debora.data.binary.prev[-1,]
+jose.data.binary.prev <- jose.data.binary.prev[-1,]
+katia.data.binary.prev <- katia.data.binary.prev[-1,]
+wallace.data.binary.prev <- wallace.data.binary.prev[-1,]
+
+# Create testing and training sets 
+prev.indices.debora <- sample(nrow(debora.data.binary.prev), size = 250)
+prev.indices.jose <- sample(nrow(jose.data.binary.prev), size = 250)
+prev.indices.katia <- sample(nrow(katia.data.binary.prev), size = 250)
+prev.indices.wallace <- sample(nrow(wallace.data.binary.prev), size = 250)
+
+training.set.debora.prev <- debora.data.binary.prev[prev.indices.debora,]
+testing.set.debora.prev <-  debora.data.binary.prev[-prev.indices.debora,]
+
+training.set.jose.prev <- jose.data.binary.prev[prev.indices.jose,]
+testing.set.jose.prev <-  jose.data.binary.prev[-prev.indices.jose,]
+
+training.set.katia.prev <- katia.data.binary.prev[prev.indices.katia,]
+testing.set.katia.prev <-  katia.data.binary.prev[-prev.indices.katia,]
+
+training.set.wallace.prev <- wallace.data.binary.prev[prev.indices.wallace,]
+testing.set.wallace.prev <-  wallace.data.binary.prev[-prev.indices.wallace,]
+
+# Find change points
+actual.cp <- find_change_points(wallace.data.binary)
+
+mypred <- get_pred_knn(training.set.wallace.prev, wallace.data.binary.prev, 2)
+mypred$prediction <- ifelse(mypred$prediction >= .5, 1, 0)
+mypred <- mypred[c(2,1)]
+knn.cp <- find_change_points(mypred)
+
+calc_quality_cp(actual.cp, knn.cp)
+
+
+### Task 4
+
+# 1 = waist, 2 = left thigh, 3 = right arm, 4 = right ankle
+# Create a data frame for each accelerometer location
+waist.data.test <- testing.binary[,c("x1","y1", "z1", "class")]
+waist.data.train <- training.binary[,c("x1","y1", "z1", "class")]
+mypred <- get_pred_knn(waist.data.train, waist.data.test, 10)
+mypred$prediction <- ifelse(mypred$prediction >= .5, 1, 0)
+waist.metrics <- get_metrics(mypred)
+
+thigh.data.test <- testing.binary[,c("x2","y2", "z2", "class")]
+thigh.data.train <- training.binary[,c("x2","y2", "z2", "class")]
+mypred <- get_pred_knn(thigh.data.train, thigh.data.test, 10)
+mypred$prediction <- ifelse(mypred$prediction >= .5, 1, 0)
+thigh.metrics <- get_metrics(mypred)
+
+arm.data.test <- testing.binary[,c("x3","y3", "z3", "class")]
+arm.data.train <- training.binary[,c("x3","y3", "z3", "class")]
+mypred <- get_pred_knn(arm.data.train, arm.data.test, 10)
+mypred$prediction <- ifelse(mypred$prediction >= .5, 1, 0)
+arm.metrics <- get_metrics(mypred)
+
+ankle.data.test <- testing.binary[,c("x4","y4", "z4", "class")]
+ankle.data.train <- training.binary[,c("x4","y4", "z4", "class")]
+mypred <- get_pred_knn(ankle.data.train, ankle.data.test, 10)
+mypred$prediction <- ifelse(mypred$prediction >= .5, 1, 0)
+ankle.metrics <- get_metrics(mypred)
+
+
+# Create a data frame for each accelerometer location
+waist.data.train <- training.set.wallace.prev[,c("x1","y1", "z1", "prev", "class")]
+mypred <- get_pred_knn(waist.data.train, wallace.data.binary.prev[,c("x1","y1", "z1", "prev", "class")], 10)
+mypred$prediction <- ifelse(mypred$prediction >= .5, 1, 0)
+mypred <- mypred[c(2,1)]
+#waist.metrics <- get_metrics(mypred)
+knn.cp <- find_change_points(mypred)
+calc_quality_cp(actual.cp, knn.cp)
+
+thigh.data.train <- training.set.wallace.prev[,c("x2","y2", "z2", "prev", "class")]
+mypred <- get_pred_knn(thigh.data.train, wallace.data.binary.prev[,c("x2","y2", "z2", "prev", "class")], 10)
+mypred$prediction <- ifelse(mypred$prediction >= .5, 1, 0)
+mypred <- mypred[c(2,1)]
+#thigh.metrics <- get_metrics(mypred)
+knn.cp <- find_change_points(mypred)
+calc_quality_cp(actual.cp, knn.cp)
+
+arm.data.train <- training.set.wallace.prev[,c("x3","y3", "z3", "prev", "class")]
+mypred <- get_pred_knn(arm.data.train, wallace.data.binary.prev[,c("x3","y3", "z3", "prev", "class")], 10)
+mypred$prediction <- ifelse(mypred$prediction >= .5, 1, 0)
+mypred <- mypred[c(2,1)]
+#arm.metrics <- get_metrics(mypred)
+knn.cp <- find_change_points(mypred)
+calc_quality_cp(actual.cp, knn.cp)
+
+ankle.data.train <- training.set.wallace.prev[,c("x4","y4", "z4", "prev", "class")]
+mypred <- get_pred_knn(ankle.data.train, wallace.data.binary.prev[,c("x4","y4", "z4", "prev", "class")], 10)
+mypred$prediction <- ifelse(mypred$prediction >= .5, 1, 0)
+mypred <- mypred[c(2,1)]
+#ankle.metrics <- get_metrics(mypred)
+knn.cp <- find_change_points(mypred)
+calc_quality_cp(actual.cp, knn.cp)
